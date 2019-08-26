@@ -6,10 +6,9 @@
 
 import * as nls from "vscode-nls";
 import * as path from "path";
-import { window, QuickPickItem, workspace } from "vscode";
+import { window, QuickPickItem, workspace, ViewColumn } from "vscode";
 import { FossilUndoDetails, Path, Ref, RefType, Commit, LogEntryOptions, CommitDetails, IFileStatus } from "./fossilBase";
 import { humanise } from "./humanise";
-import * as os from "os";
 import { Repository, LogEntriesOptions } from "./repository";
 const localize = nls.loadMessageBundle();
 
@@ -27,7 +26,6 @@ const NOOP = function () { }
 export const enum BranchExistsAction { None, Reopen, UpdateTo }
 export const enum PushCreatesNewHeadAction { None, Pull }
 export const enum WarnScenario { Merge, Update }
-export const enum DefaultRepoNotConfiguredAction { None, OpenHGRC }
 export const enum CommitSources { File, Branch, Repo }
 
 export namespace interaction {
@@ -116,23 +114,14 @@ export namespace interaction {
         return window.showWarningMessage(localize('multi head branches', "These branches have multiple heads: {0}. Merges required before pushing.", branchesWithMultipleHeads.join(",")));
     }
 
-    export async function warnDefaultRepositoryNotConfigured(message?: string): Promise<DefaultRepoNotConfiguredAction> {
+    export async function warnDefaultRepositoryNotConfigured(message?: string): Promise<void> {
         const defaultMessage = localize('no default repo', "No default repository is configured.");
-        const hgrcOption = localize('open hgrc', 'Open hgrc file');
-        const choice = await window.showErrorMessage(message || defaultMessage, hgrcOption);
-        if (choice === hgrcOption) {
-            return DefaultRepoNotConfiguredAction.OpenHGRC;
-        }
-        return DefaultRepoNotConfiguredAction.None;
+        await window.showErrorMessage(message || defaultMessage, "");
+        return;
     }
 
-    export function warnNoPaths(push: boolean) {
-        if (push) {
-            return warnDefaultRepositoryNotConfigured(localize('no paths to push', "Your repository has no paths configured to push to."));
-        }
-        else {
-            return warnDefaultRepositoryNotConfigured(localize('no paths to pull', "Your repository has no paths configured to pull from."));
-        }
+    export function warnNoPaths(type: string) {
+        return warnDefaultRepositoryNotConfigured(localize(`no paths to ${type}`, `Your repository has no paths configured for ${type}ing.`));
     }
 
     export function warnResolveConflicts(this: void) {
@@ -185,10 +174,35 @@ export namespace interaction {
 
     export async function inputRepoUrl(this: void): Promise<string | undefined> {
         const url = await window.showInputBox({
-            prompt: localize('repourl', "Repository URL"),
+            prompt: localize('repourl', "Repository URI"),
             ignoreFocusOut: true
         });
         return url;
+    }
+
+    export async function inputPrompt(msg: string): Promise<string | undefined> {
+        const title = 'Fossil Request'
+        const panel = window.createWebviewPanel('inputPrompt', title, ViewColumn.One);
+        panel.webview.html = `<!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>${title}</title>
+        </head>
+        <body>
+            <pre>
+            ${'\n\n\n' + msg}
+            </pre>
+        </body>
+        </html>`
+        const lines = msg.split('\n')
+        const resp = await window.showInputBox({
+            prompt: localize('inputprompt', lines[lines.length-1]),
+            ignoreFocusOut: true
+        });
+        panel.dispose();
+        return resp;
     }
 
     export async function inputRepoName(this: void): Promise<string | undefined> {
@@ -211,7 +225,7 @@ export namespace interaction {
     export async function inputCloneUser(this: void): Promise<string | undefined> {
         const auth = await window.showInputBox({
             prompt: localize('parent', "Username "),
-            value: 'None',
+            placeHolder: 'None',
             ignoreFocusOut: true
         });
         return auth
@@ -220,7 +234,8 @@ export namespace interaction {
     export async function inputCloneUserAuth(this: void): Promise<string | undefined> {
         const auth = await window.showInputBox({
             prompt: localize('parent', "User Authentication"),
-            value: 'None',
+            placeHolder: 'None',
+            password: true,
             ignoreFocusOut: true
         });
         return auth
@@ -461,6 +476,15 @@ export namespace interaction {
         const deleteOption = localize('delete', "Delete");
         const choice = await window.showWarningMessage(message, { modal: true }, deleteOption);
         return choice === deleteOption;
+    }
+
+    export async function confirmCommitWorkingGroup(): Promise<boolean> {
+        let message: string;
+        message = localize('confirm commit working group', "There are no staged changes, do you want to commit working changes?\n");
+
+        const respOpt = localize('confirm', "Confirm");
+        const choice = await window.showWarningMessage(message, { modal: true }, respOpt);
+        return choice === respOpt;
     }
 
     export async function handleChoices(stdout: string, limit: number): Promise<string> {

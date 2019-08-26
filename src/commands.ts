@@ -4,17 +4,15 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Uri, commands, scm, Disposable, window, workspace, QuickPickItem, OutputChannel, Range, WorkspaceEdit, Position, SourceControlResourceState, SourceControl, SourceControlResourceGroup, TextDocumentShowOptions, ViewColumn } from "vscode";
-import { Ref, RefType, Fossil, Commit, FossilError, FossilErrorCodes, PushOptions, IMergeResult, LogEntryOptions, IFileStatus, CommitDetails, Revision, SyncOptions } from "./fossilBase";
+import { Uri, commands, scm, Disposable, window, workspace, OutputChannel, SourceControlResourceState, SourceControl, SourceControlResourceGroup, TextDocumentShowOptions, ViewColumn } from "vscode";
+import { Ref, Fossil, Commit, FossilError, FossilErrorCodes, IFileStatus, CommitDetails } from "./fossilBase";
 import { Model } from "./model";
 import { Resource, Status, CommitOptions, CommitScope, MergeStatus, LogEntriesOptions, Repository } from "./repository"
 import * as path from 'path';
 import * as os from 'os';
-import { WorkingDirectoryGroup, StagingGroup, MergeGroup, UntrackedGroup, ConflictGroup, ResourceGroup, ResourceGroupId, isResourceGroup } from "./resourceGroups";
-import { interaction, BranchExistsAction, WarnScenario, CommitSources, DescribedBackAction, DefaultRepoNotConfiguredAction, LogMenuAPI } from "./interaction";
+import { WorkingDirectoryGroup, StagingGroup, MergeGroup, UntrackedGroup, isResourceGroup } from "./resourceGroups";
+import { interaction, BranchExistsAction, WarnScenario, CommitSources, LogMenuAPI } from "./interaction";
 import { humanise } from "./humanise"
-// import * as vscode from "vscode";
-// import * as fs from "fs";
 import { partition } from "./util";
 import * as nls from 'vscode-nls';
 import { toFossilUri } from "./uri";
@@ -49,6 +47,7 @@ export class CommandCenter {
 
     private model: Model;
     private disposables: Disposable[];
+    private open_resources : Resource[]
 
     constructor(
         private fossil: Fossil,
@@ -58,6 +57,8 @@ export class CommandCenter {
         if (model) {
             this.model = model;
         }
+
+        this.open_resources = []
 
         this.disposables = Commands.map(({ commandId, key, method, options }) => {
             const command = this.createCommand(commandId, key, method, options);
@@ -77,13 +78,16 @@ export class CommandCenter {
 
     @command('fossil.openResource')
     async openResource(resource: Resource): Promise<void> {
+        this.open_resources.push(resource)
         await this._openResource(resource, undefined, true, false);
     }
 
-    private async _openResource(resource: Resource, preview?: boolean, preserveFocus?: boolean, preserveSelection?: boolean): Promise<void> {
+    private async _openResource(resource: Resource | undefined, preview?: boolean, preserveFocus?: boolean, preserveSelection?: boolean): Promise<void> {
+        if(!resource) return;
         const left = this.getLeftResource(resource);
         const right = this.getRightResource(resource);
         const title = this.getTitle(resource);
+        console.log("open resource: " + resource.resourceUri)
 
         if (!right) {
             // TODO
@@ -111,7 +115,6 @@ export class CommandCenter {
             await window.showTextDocument(document, opts);
             return;
         }
-
         return await commands.executeCommand<void>('vscode.diff', left, right, title, opts);
     }
 
@@ -134,6 +137,7 @@ export class CommandCenter {
             case Status.MISSING:
             case Status.UNTRACKED:
             case Status.CLEAN:
+            default:
                 return undefined;
         }
     }
@@ -148,6 +152,9 @@ export class CommandCenter {
         switch (resource.status) {
             case Status.DELETED:
                 return resource.resourceUri.with({ scheme: 'fossil', query: '.' });
+                
+            case Status.MISSING:
+                    return undefined;
 
             case Status.ADDED:
             case Status.IGNORED:
@@ -156,11 +163,9 @@ export class CommandCenter {
             case Status.UNTRACKED:
             case Status.CLEAN:
             case Status.CONFLICT:
+            default:
                 console.log('Right resource: ' + resource.resourceUri)
                 return resource.resourceUri;
-
-            case Status.MISSING:
-                return undefined;
         }
     }
 
@@ -264,17 +269,6 @@ export class CommandCenter {
         this.model.close(repository);
     }
 
-    @command('fossil.openhgrc', { repository: true })
-    async openhgrc(repository: Repository): Promise<void> {
-        let hgrcPath = await repository.hgrcPathIfExists();
-        if (!hgrcPath) {
-            hgrcPath = await repository.createHgrc();
-        }
-
-        const hgrcUri = Uri.file(hgrcPath)
-        commands.executeCommand("vscode.open", hgrcUri);
-    }
-
     @command('fossil.openFiles')
     openFiles(...resources: (Resource | SourceControlResourceGroup)[]): Promise<void> {
         if (resources.length === 1) {
@@ -336,6 +330,7 @@ export class CommandCenter {
 
         const preview = resources.length === 1 ? undefined : false;
         for (let resource of resources) {
+            this.open_resources.push(resource)
             await this._openResource(resource, preview, true, false);
         }
     }
@@ -359,7 +354,31 @@ export class CommandCenter {
             return;
         }
 
+        this.open_resources.push(resource)
         return await this._openResource(resource);
+    }
+
+    @command('fossil.ignore')
+    async ignore(...resourceStates: SourceControlResourceState[]): Promise<void> {
+        if (resourceStates.length === 0) {
+            const resource = this.getSCMResource();
+
+            if (!resource) {
+                return;
+            }
+
+            resourceStates = [resource];
+        }
+
+        const scmResources = resourceStates
+            .filter(s => s instanceof Resource && s.resourceGroup instanceof UntrackedGroup) as Resource[];
+
+        if (!scmResources.length) {
+            return;
+        }
+
+        const resources = scmResources.map(r => r.resourceUri);
+        await this.runByRepository(resources, async (repository, uris) => repository.ignore(...uris));
     }
 
     @command('fossil.addAll', { repository: true })
@@ -426,7 +445,13 @@ export class CommandCenter {
         }
 
         const scmResources = resourceStates
-            .filter(s => s instanceof Resource && (s.resourceGroup instanceof WorkingDirectoryGroup || s.resourceGroup instanceof MergeGroup)) as Resource[];
+            .filter(s => s instanceof Resource &&
+                        (
+                            s.resourceGroup instanceof WorkingDirectoryGroup
+                            || s.resourceGroup instanceof MergeGroup
+                            || s.resourceGroup instanceof UntrackedGroup
+                        )
+                    ) as Resource[];
 
         if (!scmResources.length) {
             return;
@@ -521,26 +546,24 @@ export class CommandCenter {
             interaction.warnResolveConflicts();
             return false;
         }
-
+        const numWorkingResources = repository.workingDirectoryGroup.resources.length;
+        const numStagingResources = repository.stagingGroup.resources.length;
         const isMergeCommit = repository.repoStatus && repository.repoStatus.isMerge;
+
         if (isMergeCommit) {
-            // merge-commit
             opts = { scope: CommitScope.ALL };
         }
         else {
-            // validate non-merge commit
-            const numWorkingResources = repository.workingDirectoryGroup.resources.length;
-            const numStagingResources = repository.stagingGroup.resources.length;
             if (!opts || opts.scope === undefined) {
-                if (numStagingResources > 0) {
-                    opts = {
-                        scope: CommitScope.STAGED_CHANGES
-                    };
+                if(numWorkingResources > 0 && numStagingResources == 0){
+                    const confirm = await interaction.confirmCommitWorkingGroup()
+                    if (confirm){
+                        opts = { scope: CommitScope.CHANGES };
+                    }
+                    else return false;
                 }
-                else {
-                    opts = {
-                        scope: CommitScope.CHANGES
-                    };
+                else{
+                    opts = { scope: CommitScope.STAGED_CHANGES };
                 }
             }
 
@@ -584,6 +607,10 @@ export class CommandCenter {
 
         if (message && didCommit) {
             scm.inputBox.value = "";
+            this.open_resources.map(r => {
+                
+                this._openResource(this.getSCMResource(r.resourceUri))
+            });
         }
     }
 
@@ -598,6 +625,7 @@ export class CommandCenter {
 
         if (didCommit) {
             scm.inputBox.value = "";
+            this.open_resources.map(r => this._openResource(r));
         }
     }
 
@@ -608,7 +636,7 @@ export class CommandCenter {
 
     @command('fossil.commitAll', { repository: true })
     async commitAll(repository: Repository): Promise<void> {
-        await this.commitWithAnyInput(repository, { scope: CommitScope.ALL_WITH_ADD_REMOVE });
+        await this.commitWithAnyInput(repository, { scope: CommitScope.ALL });
     }
 
     private focusScm() {
@@ -617,7 +645,6 @@ export class CommandCenter {
 
     @command('fossil.undo', { repository: true })
     async undo(repository: Repository): Promise<void> {
-        console.log("running fossil undo")
         try {
             const undo = await repository.undo(true); // dry-run
             if (await interaction.confirmUndo(undo)) {
@@ -700,7 +727,7 @@ export class CommandCenter {
         const paths = await repository.getPath();
 
         if (paths.url == "") {
-            await interaction.warnNoPaths(false);
+            await interaction.warnNoPaths('pull');
             return;
         }
 
@@ -762,6 +789,7 @@ export class CommandCenter {
 
                 if (didCommit) {
                     scm.inputBox.value = "";
+                    this.open_resources.map(r => this._openResource(r));
                 }
             }
         }
@@ -798,7 +826,7 @@ export class CommandCenter {
         const path = await repository.getPath();
 
         if (path.url == "") {
-            const action = await interaction.warnNoPaths(true);
+            await interaction.warnNoPaths('push');
             return;
         }
 
@@ -952,7 +980,6 @@ export class CommandCenter {
         }
 
         if (uri.scheme === 'file') {
-            const uriString = uri.toString();
             const repository = this.model.getRepository(uri);
 
             if (!repository) {

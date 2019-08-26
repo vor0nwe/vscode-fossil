@@ -4,19 +4,12 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// import * as fs from 'fs';
 import * as path from 'path';
-// import * as os from 'os';
 import * as cp from 'child_process';
-import { assign, /* uniqBy,*/ groupBy, /*denodeify,*/ IDisposable, toDisposable, dispose, mkdirp, asciiOnly, writeStringToTempFile /*, log*/ } from "./util";
-import { EventEmitter, Event, /*OutputChannel,*/ workspace, Disposable } from "vscode";
-// import * as nls from 'vscode-nls';
-// import { FossilCommandServer } from "./hgserve";
-// import { activate } from "./main";
-
-// const localize = nls.loadMessageBundle();
-// const readdir = denodeify<string[]>(fs.readdir);
-// const readfile = denodeify<string>(fs.readFile);
+import { existsSync, appendFileSync, writeFileSync } from 'fs';
+import { groupBy, IDisposable, toDisposable, dispose, mkdirp } from "./util";
+import { EventEmitter, Event, workspace, window, Disposable, Uri } from "vscode";
+import { interaction } from './interaction';
 
 export interface IFossil {
     path: string;
@@ -156,7 +149,18 @@ export async function exec(child: cp.ChildProcess): Promise<IExecutionResult> {
         }),
         new Promise<string>(c => {
             const buffers: string[] = [];
-            on(child.stdout, 'data', b => buffers.push(b));
+            async function checkForPrompt(input: any){
+                buffers.push(input);
+                const inputStr: string = input.toString()
+                if(inputStr){
+                    if(inputStr.endsWith("? ") || inputStr.endsWith("?") ||
+                       inputStr.endsWith(": ") || inputStr.endsWith(":")){
+                        const resp = await interaction.inputPrompt(buffers.toString())
+                        child.stdin.write(resp + '\n')
+                    }
+                }
+            }
+            on(child.stdout, 'data', b => checkForPrompt(b));
             once(child.stdout, 'close', () => c(buffers.join('')));
         }),
         new Promise<string>(c => {
@@ -267,7 +271,6 @@ export const FossilErrorCodes = {
 export class Fossil {
 
     private fossilPath: string;
-    private instrumentEnabled: boolean;
     private disposables: Disposable[] = [];
     private openRepository: Repository | undefined;
 
@@ -276,13 +279,6 @@ export class Fossil {
 
     constructor(options: IFossilOptions) {
         this.fossilPath = options.fossilPath;
-        this.instrumentEnabled = options.enableInstrumentation;
-
-        workspace.onDidChangeConfiguration(() => this.onConfigurationChange(), this, this.disposables);
-        this.onConfigurationChange();
-    }
-
-    async onConfigurationChange(forceServerRestart?: boolean) {
     }
 
     open(repository: string): Repository {
@@ -320,23 +316,15 @@ export class Fossil {
         return await this._exec(args, options);
     }
 
-    stream(cwd: string, args: string[], options: any = {}): cp.ChildProcess {
-        options = assign({ cwd }, options || {});
-        return this.spawn(args, options);
-    }
-
     private async _exec(args: string[], options: any = {}): Promise<IExecutionResult> {
         const startTimeHR = process.hrtime();
 
         let result: IExecutionResult;
         const child = this.spawn(args, options);
-        if (options.input) {
-            child.stdin.end(options.input, 'utf8');
-        }
         result = await exec(child);
 
         const durationHR = process.hrtime(startTimeHR);
-        this.log("Enabled: " + this.instrumentEnabled + `, fossil ${args.join(' ')}: ${Math.floor(msFromHighResTime(durationHR))}ms\n`);
+        this.log(`fossil ${args.join(' ')}: ${Math.floor(msFromHighResTime(durationHR))}ms\n`);
 
         if (result.exitCode) {
             let fossilErrorCode: string | undefined = void 0;
@@ -377,15 +365,13 @@ export class Fossil {
             options = {};
         }
 
-        if (!options.stdio && !options.input) {
-            options.stdio = ['ignore', null, null]; // Unless provided, ignore stdin and leave default streams for stdout and stderr
+        if (!options.stdio) {
+            options.stdio = 'pipe';
         }
 
         options.env = {
-            HGENCODING: "utf-8", // allow user's env to overwrite this
             ...process.env,
             ...options.env,
-            VSCODE_HG_COMMAND: args[0],
             LC_ALL: 'en_US',
             LANG: 'en_US.UTF-8'
         }
@@ -434,14 +420,6 @@ export class Repository {
         return await this.fossil.exec(this.repositoryRoot, args, options);
     }
 
-    stream(args: string[], options: any = {}): cp.ChildProcess {
-        return this.fossil.stream(this.repositoryRoot, args, options);
-    }
-
-    spawn(args: string[], options: any = {}): cp.ChildProcess {
-        return this.fossil.spawn(args, options);
-    }
-
     async config(scope: string, key: string, value: any, options: any): Promise<string> {
         const args = ['config'];
 
@@ -465,22 +443,9 @@ export class Repository {
         if (paths && paths.length) {
             args.push.apply(args, paths);
         }
-        else {
-            // args.push('.');
-        }
 
         await this.exec(args);
     }
-
-    // async addRemove(paths: string[]): Promise<void> {
-    //     const args = ['addremove', '-s', '50'];
-
-    //     for (const path of paths) {
-    //         args.push('-I', path);
-    //     }
-
-    //     await this.run(args);
-    // }
 
     async cat(relativePath: string, ref?: string): Promise<string> {
         const args = ['cat', relativePath];
@@ -538,12 +503,8 @@ export class Repository {
             args.push(...opts.fileList);
         }
 
-        if (asciiOnly(message)) {
-            args.push('-m', message || "");
-        }
-        else {
-            const commitMessageFsPath = await writeStringToTempFile(message, disposables);
-            args.push('-l', commitMessageFsPath);
+        if (message && message.length) {
+            args.push('-m', message);
         }
 
         try {
@@ -563,11 +524,12 @@ export class Repository {
     }
 
     async branch(name: string, opts?: { force: boolean }): Promise<void> {
-        const args = ['branch', 'new'];
-        if (opts && opts.force) {
-            args.push('-f');
+        const args = ['branch', 'new', name];
+        const currBranch = await this.getCurrentBranch();
+        if(currBranch && currBranch.name)
+        {
+            args.push(currBranch.name)
         }
-        args.push(name);
 
         try {
             await this.exec(args);
@@ -601,6 +563,20 @@ export class Repository {
         }
     }
 
+    async ignore(paths: string[]): Promise<void> {
+        const ignore_file = this.repositoryRoot + '/.fossil-settings/ignore-glob'
+        if(existsSync(ignore_file)){
+            appendFileSync(ignore_file, paths.join('\n') + '\n' )
+        }
+        else{
+            mkdirp(this.repositoryRoot + '/.fossil-settings/')
+            writeFileSync(ignore_file, paths.join('\n')+ '\n');
+            this.add([ignore_file])
+        }
+        const document = await workspace.openTextDocument(ignore_file)
+        window.showTextDocument(document);
+    }
+
     async undo(dryRun?: boolean): Promise<FossilUndoDetails> {
         const args = ['undo'];
 
@@ -623,7 +599,6 @@ export class Repository {
             }
 
             const [_, revision, kind] = match;
-            const commitDetails: ICommitDetails | undefined = (dryRun && kind === "commit") ? await this.tryGetLastCommitDetails() : undefined;
 
             return {
                 revision: parseInt(revision),
@@ -642,7 +617,7 @@ export class Repository {
         try {
             return {
                 message: await this.getLastCommitMessage(),
-                affectedFiles: this.parseStatusLines(await this.getStatus("."))
+                affectedFiles: this.parseStatusLines(await this.getStatus())
             }
         }
         catch (e) {
@@ -741,9 +716,9 @@ export class Repository {
         return files;
     }
 
-    async merge(revQuery): Promise<IMergeResult> {
+    async merge(revQuery: string): Promise<IMergeResult> {
         try {
-            await this.exec(['merge', '-r', revQuery]);
+            await this.exec(['merge', revQuery]);
             return {
                 unresolvedCount: 0
             }
@@ -769,31 +744,20 @@ export class Repository {
 
     async getSummary(): Promise<IRepoStatus> {
         const summary = await this.getStatus();
-        const lines = summary.trim().split('\n');
-        const parentLines = lines.filter(line => line.startsWith("parent:"));
-        const parents = parentLines.length ? this.parseParentLines(parentLines) : [];
-
-        const commitLine = lines.filter(line => line.startsWith("checkout:"))[0];
-        if (commitLine) {
-            const isMerge = /\bmerge\b/.test(commitLine);
-            return { isMerge, parents };
-        }
-
-        return { isMerge: false, parents };
+        const parents = this.parseParentLines(summary);
+        const isMerge = /\bMERGED WITH\b/.test(summary);
+        return { isMerge, parents };
     }
 
-    parseParentLines(parentLines: string[]): Ref[] {
-        // e.g. "parent: 44:2f88476fceca tip"
+    parseParentLines(parentLines: string): Ref[] {
         const refs: Ref[] = [];
-        for (const line of parentLines) {
-            const match = line.match(/^parent:\s+([a-f0-9]+)/);
-            if (match) {
-                const [_, hash, date] = match;
-                refs.push({
-                    type: RefType.Commit,
-                    commit: hash
-                });
-            }
+        const match = parentLines.match(/parent:\s+([a-f0-9]+)/);
+        if (match) {
+            const [_, hash] = match;
+            refs.push({
+                type: RefType.Commit,
+                commit: hash
+            });
         }
         return refs;
     }
@@ -819,12 +783,10 @@ export class Repository {
         return "";
     }
 
-    async getStatus(revision?: string): Promise<string> {
+    async getStatus(): Promise<string> {
         const args = ['status'];
-
         const executionResult = await this.exec(args); // quiet, include renames/copies
-        const status = executionResult.stdout;
-        return status;
+        return executionResult.stdout;
     }
 
     parseStatusLines(status: string): IFileStatus[] {
@@ -833,7 +795,15 @@ export class Repository {
 
         lines.forEach(line => {
             if (line.length > 0) {
-                if (line.startsWith("DELETED")) {
+                if (line.startsWith("UPDATED_BY_MERGE")) {
+                    var fileUri: string = line.substr(17).trim();
+                    result.push({status: "M", path: fileUri});
+                }
+                else if (line.startsWith("ADDED_BY_MERGE")) {
+                    var fileUri: string = line.substr(15).trim();
+                    result.push({status: "A", path: fileUri});
+                }
+                else if (line.startsWith("DELETED")) {
                     var fileUri: string = line.substr(8).trim();
                     result.push({status: "R", path: fileUri});
                 }
@@ -858,14 +828,11 @@ export class Repository {
         return result;
     }
 
-    async getExtras(revision?: string): Promise<string> {
+    async getExtras(): Promise<string> {
         const args = ['extras'];
-
         const executionResult = await this.exec(args);
-        const status = executionResult.stdout;
-        return status;
+        return executionResult.stdout;
     }
-
 
     parseExtrasLines(status: string): IFileStatus[] {
         const result: IFileStatus[] = [];
@@ -890,10 +857,10 @@ export class Repository {
     }
 
     async getLogEntries({ revQuery, filePath, limit }: LogEntryRepositoryOptions = {}): Promise<Commit[]> {
-        const args = ['timeline', 'before']
+        const args = ['timeline']
 
         if (revQuery) {
-            args.push(revQuery);
+            args.push('before', revQuery);
         }
         if (limit) {
             args.push('-n', `${limit}`);
@@ -922,7 +889,7 @@ export class Repository {
         return logEntries;
     }
 
-    async getParents(revision?: string): Promise<string> {
+    async getParents(): Promise<string> {
         const message = await this.getStatus();
         var comment = message.match(/parent:\s+(.*)\s(.*)\n/)
         if (comment) return comment[1];
@@ -948,7 +915,6 @@ export class Repository {
             .map((line: string): Ref | null => {
                 let match = line.match(/\b(.+)$/);
                 if (match) {
-                    console.log(match)
                     return { name: match[1], commit: match[1], type: RefType.Branch };
                 }
                 return null;

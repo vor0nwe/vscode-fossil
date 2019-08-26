@@ -1,19 +1,17 @@
 
-import { Uri, Command, EventEmitter, Event, scm, SourceControl, SourceControlInputBox, SourceControlResourceGroup, SourceControlResourceState, SourceControlResourceDecorations, Disposable, ProgressLocation, window, workspace, WorkspaceEdit, ThemeColor, commands } from 'vscode';
-import { Repository as BaseRepository, Ref, Commit, RefType, FossilError, IRepoStatus, SyncOptions, PullOptions, PushOptions, FossilErrorCodes, IMergeResult, CommitDetails, LogEntryRepositoryOptions, FossilUndoDetails } from './fossilBase';
-import { anyEvent, filterEvent, eventToPromise, dispose, IDisposable, delay, groupBy, partition } from './util';
+import { Uri, Command, EventEmitter, Event, scm, SourceControl, SourceControlResourceState, SourceControlResourceDecorations, Disposable, ProgressLocation, window, workspace, commands } from 'vscode';
+import { Repository as BaseRepository, Ref, Commit, FossilError, IRepoStatus, SyncOptions, PullOptions, PushOptions, FossilErrorCodes, IMergeResult, CommitDetails, LogEntryRepositoryOptions, FossilUndoDetails } from './fossilBase';
+import { anyEvent, filterEvent, eventToPromise, dispose, IDisposable, delay, partition } from './util';
 import { memoize, throttle, debounce } from './decorators';
 import { StatusBarCommands } from './statusbar';
 import typedConfig, { PushPullScopeOptions } from "./config";
 
 import * as path from 'path';
-import * as fs from 'fs';
 import * as nls from 'vscode-nls';
 import { ResourceGroup, createEmptyStatusGroups, UntrackedGroup, WorkingDirectoryGroup, StagingGroup, ConflictGroup, MergeGroup, IStatusGroups, groupStatuses, IGroupStatusesParams } from './resourceGroups';
 import { Path } from './fossilBase';
 import { AutoInOutState, AutoInOutStatuses, AutoIncomingOutgoing } from './autoinout';
-import { DefaultRepoNotConfiguredAction, interaction, PushCreatesNewHeadAction } from './interaction';
-// import { exists } from 'fs';
+import { interaction, PushCreatesNewHeadAction } from './interaction';
 import { toFossilUri } from './uri';
 
 const timeout = (millis: number) => new Promise(c => setTimeout(c, millis));
@@ -60,7 +58,7 @@ export class Resource implements SourceControlResourceState {
     @memoize
     get command(): Command {
         return {
-            command: 'hg.openResource',
+            command: 'fossil.openResource',
             title: localize('open', "Open"),
             arguments: [this]
         };
@@ -203,7 +201,8 @@ export const enum Operation {
     // AddRemove = 1 << 22,
     // SetBookmark = 1 << 23,
     // RemoveBookmark = 1 << 24,
-    Close = 1 << 25
+    Close = 1 << 25,
+    Ignore = 1 << 26
 }
 
 function isReadOnly(operation: Operation): boolean {
@@ -246,7 +245,6 @@ class OperationsImpl implements Operations {
 
 export const enum CommitScope {
     ALL,
-    ALL_WITH_ADD_REMOVE,
     STAGED_CHANGES,
     CHANGES
 }
@@ -258,9 +256,6 @@ export interface CommitOptions {
 export class Repository implements IDisposable {
     private _onDidChangeRepository = new EventEmitter<Uri>();
     readonly onDidChangeRepository: Event<Uri> = this._onDidChangeRepository.event;
-
-    private _onDidChangeHgrc = new EventEmitter<void>();
-    readonly onDidChangeHgrc: Event<void> = this._onDidChangeHgrc.event;
 
     private _onDidChangeState = new EventEmitter<RepositoryState>();
     readonly onDidChangeState: Event<RepositoryState> = this._onDidChangeState.event;
@@ -386,9 +381,7 @@ export class Repository implements IDisposable {
         onRelevantRepositoryChange(this.onFSChange, this, this.disposables);
 
         const onRelevantHgChange = filterEvent(onRelevantRepositoryChange, uri => /\/\.hg\//.test(uri.path));
-        const onHgrcChange = filterEvent(onRelevantHgChange, uri => /\/\.hg\/hgrc$/.test(uri.path));
         onRelevantHgChange(this._onDidChangeRepository.fire, this._onDidChangeRepository, this.disposables);
-        onHgrcChange(this.onHgrcChange, this, this.disposables);
 
         this._sourceControl = scm.createSourceControl('fossil', 'Fossil', Uri.parse(repository.root));
         this.disposables.push(this._sourceControl);
@@ -469,12 +462,6 @@ export class Repository implements IDisposable {
         }
     }
 
-    @debounce(1000)
-    private onHgrcChange(uri: Uri): void {
-        this._onDidChangeHgrc.fire();
-    }
-
-
     @throttle
     async add(...uris: Uri[]): Promise<void> {
         let resources: Resource[];
@@ -497,6 +484,18 @@ export class Repository implements IDisposable {
         }
         const relativePaths: string[] = resources.map(r => this.mapResourceToRepoRelativePath(r));
         await this.run(Operation.Remove, () => this.repository.remove(relativePaths));
+    }
+
+    @throttle
+    async ignore(...uris: Uri[]): Promise<void> {
+        let resources: Resource[];
+        if (uris.length === 0) {
+            resources = this._groups.untracked.resources;
+        } else {
+            resources = this.mapResources(uris);
+        }
+        const relativePaths: string[] = resources.map(r => this.mapResourceToRepoRelativePath(r));
+        await this.run(Operation.Ignore, () => this.repository.ignore(relativePaths));
     }
 
     mapResources(resourceUris: Uri[]): Resource[] {
@@ -524,11 +523,18 @@ export class Repository implements IDisposable {
                 resources = this._groups.working.resources;
             }
 
-            const [missingResources, otherResources] = partition(resources, r => r.status === Status.MISSING);
+            const missingResources = partition(resources, r => r.status === Status.MISSING);
 
-            if (missingResources.length) {
-                const relativePaths: string[] = missingResources.map(r => this.mapResourceToRepoRelativePath(r));
+            if (missingResources[0].length) {
+                const relativePaths: string[] = missingResources[0].map(r => this.mapResourceToRepoRelativePath(r));
                 await this.run(Operation.Remove, () => this.repository.remove(relativePaths));
+            }
+
+            const untrackedResources = partition(resources, r => r.status === Status.UNTRACKED);
+
+            if (untrackedResources[0].length) {
+                const relativePaths: string[] = untrackedResources[0].map(r => this.mapResourceToRepoRelativePath(r));
+                await this.run(Operation.Remove, () => this.repository.add(relativePaths));
             }
 
             this._groups.staging = this._groups.staging.intersect(resources);
@@ -589,6 +595,15 @@ export class Repository implements IDisposable {
             if (opts.scope === CommitScope.STAGED_CHANGES) {
                 fileList = this.stagingGroup.resources.map(r => this.mapResourceToRepoRelativePath(r));
                 await this.repository.commit(message, { fileList });
+                return;
+            }
+            if (opts.scope === CommitScope.CHANGES) {
+                fileList = this.workingDirectoryGroup.resources.map(r => this.mapResourceToRepoRelativePath(r));
+                await this.repository.commit(message, { fileList });
+                return;
+            }
+            if (opts.scope === CommitScope.ALL) {
+                await this.repository.commit(message);
                 return;
             }
             interaction.informNoChangesToCommit();
@@ -822,13 +837,6 @@ export class Repository implements IDisposable {
                 await this.repository.pull(options)
             }
             catch (e) {
-                if (e instanceof FossilError && e.fossilErrorCode === FossilErrorCodes.DefaultRepositoryNotConfigured) {
-                    const action = await interaction.warnDefaultRepositoryNotConfigured();
-                    if (action === DefaultRepoNotConfiguredAction.OpenHGRC) {
-                        commands.executeCommand("hg.openhgrc");
-                    }
-                    return;
-                }
                 throw e;
             }
         });
@@ -842,14 +850,7 @@ export class Repository implements IDisposable {
                 await this.repository.push(path, options);
             }
             catch (e) {
-                if (e instanceof FossilError && e.fossilErrorCode === FossilErrorCodes.DefaultRepositoryNotConfigured) {
-                    const action = await interaction.warnDefaultRepositoryNotConfigured();
-                    if (action === DefaultRepoNotConfiguredAction.OpenHGRC) {
-                        commands.executeCommand("hg.openhgrc");
-                    }
-                    return;
-                }
-                else if (e instanceof FossilError && e.fossilErrorCode === FossilErrorCodes.PushCreatesNewRemoteHead) {
+                if (e instanceof FossilError && e.fossilErrorCode === FossilErrorCodes.PushCreatesNewRemoteHead) {
                     const action = await interaction.warnPushCreatesNewHead();
                     if (action === PushCreatesNewHeadAction.Pull) {
                         commands.executeCommand("hg.pull");
@@ -929,9 +930,9 @@ export class Repository implements IDisposable {
             this._onRunOperation.fire(operation);
 
             try {
-                console.log('Running operation: ' + runOperation)
+                // console.log('Running operation: ' + runOperation)
                 const result = await runOperation();
-                console.log('completed operation')
+                // console.log('completed operation')
 
                 if (!isReadOnly(operation)) {
                     await this.updateModelState();
@@ -987,8 +988,8 @@ export class Repository implements IDisposable {
     }
 
     @throttle
-    public getParents(revision?: string): Promise<string> {
-        return this.repository.getParents(revision);
+    public getParents(): Promise<string> {
+        return this.repository.getParents();
     }
 
     @throttle
@@ -1000,8 +1001,8 @@ export class Repository implements IDisposable {
     public async getCommitDetails(revision: string): Promise<CommitDetails> {
 
         const commitPromise = this.getLogEntries({ revQuery: revision, limit: 1 });
-        const fileStatusesPromise = await this.repository.getStatus(revision);
-        const parentsPromise = await this.getParents(revision);
+        const fileStatusesPromise = await this.repository.getStatus();
+        const parentsPromise = await this.getParents();
 
         const [[commit], fileStatuses] = await Promise.all([commitPromise, this.repository.parseStatusLines(fileStatusesPromise)]);
 
@@ -1077,27 +1078,6 @@ export class Repository implements IDisposable {
                     + this.conflictGroup.resources.length
                     + this.untrackedGroup.resources.length
         }
-    }
-
-    private get hgrcPath(): string { return path.join(this.repository.root, ".hg", "hgrc"); }
-
-    async hgrcPathIfExists(): Promise<string | undefined> {
-        const filePath: string = this.hgrcPath;
-        const exists = await new Promise((c, e) => fs.exists(filePath, c));
-        if (exists) {
-            return filePath;
-        }
-    }
-
-    async createHgrc(): Promise<string> {
-        const filePath: string = this.hgrcPath;
-        const fd = fs.openSync(filePath, 'w');
-        fs.writeSync(fd, `[paths]
-; Uncomment line below to add a remote path:
-; default = https://bitbucket.org/<yourname>/<repo>
-`, 0, 'utf-8');
-        fs.closeSync(fd);
-        return filePath;
     }
 
     dispose(): void {

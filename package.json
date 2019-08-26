@@ -16,9 +16,9 @@
   "bugs": {
     "url": "https://github.com/koog1000/vscode-fossil/issues"
   },
-  "version": "0.0.3",
+  "version": "0.0.9",
   "engines": {
-    "vscode": "^1.17.0"
+    "vscode": "^1.23.0"
   },
   "keywords": [
     "fossil-scm",
@@ -54,6 +54,15 @@
         "icon": {
           "light": "resources/icons/light/add.svg",
           "dark": "resources/icons/dark/add.svg"
+        }
+      },
+      {
+        "command": "fossil.ignore",
+        "title": "%command.ignore%",
+        "category": "Fossil",
+        "icon": {
+          "light": "resources/icons/light/discard.svg",
+          "dark": "resources/icons/dark/discard.svg"
         }
       },
       {
@@ -109,7 +118,7 @@
         "category": "Fossil"
       },
       {
-        "command": "fossil.forget",
+        "command": "fossil.remove",
         "title": "%command.forget%",
         "category": "Fossil"
       },
@@ -437,7 +446,7 @@
         {
           "command": "fossil.init",
           "group": "navigation",
-          "when": "config.fossil.enabled && fossilOpenRepositoryCount == 0"
+          "when": "config.fossil.enabled && scmProvider == '' && fossilOpenRepositoryCount == 0"
         },
         {
           "command": "fossil.commit",
@@ -566,26 +575,6 @@
       ],
       "scm/resourceState/context": [
         {
-          "command": "fossil.resolveAgain",
-          "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == conflict",
-          "group": "inline"
-        },
-        {
-          "command": "fossil.markResolved",
-          "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == conflict",
-          "group": "inline"
-        },
-        {
-          "command": "fossil.resolveAgain",
-          "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == conflict",
-          "group": "0_resolution"
-        },
-        {
-          "command": "fossil.markResolved",
-          "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == conflict",
-          "group": "0_resolution"
-        },
-        {
           "command": "fossil.unresolve",
           "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == merge",
           "group": "1_modification"
@@ -631,7 +620,12 @@
           "group": "inline"
         },
         {
-          "command": "fossil.add",
+          "command": "fossil.ignore",
+          "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == untracked",
+          "group": "inline"
+        },
+        {
+          "command": "fossil.stage",
           "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == untracked",
           "group": "inline"
         },
@@ -646,7 +640,7 @@
           "group": "navigation"
         },
         {
-          "command": "fossil.forget",
+          "command": "fossil.remove",
           "when": "config.fossil.enabled && scmProvider == fossil && scmResourceGroup == working",
           "group": "2_modification"
         }
@@ -773,7 +767,7 @@
   "devDependencies": {
     "@types/node": "^7.0.4",
     "@types/tmp": "0.0.33",
-    "vscode": "^1.1.6"
+    "vscode": "^1.1.23"
     },
   "__metadata": {
     "id": "e828bfe6-95e7-4c7a-a334-ae2cc5ba8788",
