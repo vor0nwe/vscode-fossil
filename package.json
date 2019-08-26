@@ -759,16 +759,17 @@
   },
   "dependencies": {
     "@types/mocha": "^5.2.7",
+    "@types/vscode": "^1.37.0",
     "tmp": "0.0.31",
     "tsc": "^1.20150623.0",
     "typescript": "^3.5.3",
-    "vscode-nls": "^2.0.1"
+    "vscode-nls": "^2.0.1",
+    "vscode-test": "^1.2.0"
   },
   "devDependencies": {
     "@types/node": "^7.0.4",
-    "@types/tmp": "0.0.33",
-    "vscode": "^1.1.23"
-    },
+    "@types/tmp": "0.0.33"
+  },
   "__metadata": {
     "id": "e828bfe6-95e7-4c7a-a334-ae2cc5ba8788",
     "publisherDisplayName": "koog1000",
