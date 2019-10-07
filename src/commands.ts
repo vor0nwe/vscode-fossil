@@ -4,17 +4,19 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Uri, commands, scm, Disposable, window, workspace, OutputChannel, SourceControlResourceState, SourceControl, SourceControlResourceGroup, TextDocumentShowOptions, ViewColumn } from "vscode";
+import {Uri, commands, scm, Disposable, window, workspace, OutputChannel,
+        SourceControlResourceState, SourceControl, SourceControlResourceGroup,
+        TextDocumentShowOptions, ViewColumn } from "vscode";
+import * as nls from "vscode-nls";
+import * as path from "path";
+import * as os from "os";
 import { Ref, Fossil, Commit, FossilError, FossilErrorCodes, IFileStatus, CommitDetails } from "./fossilBase";
 import { Model } from "./model";
 import { Resource, Status, CommitOptions, CommitScope, MergeStatus, LogEntriesOptions, Repository } from "./repository"
-import * as path from 'path';
-import * as os from 'os';
 import { WorkingDirectoryGroup, StagingGroup, MergeGroup, UntrackedGroup, isResourceGroup } from "./resourceGroups";
 import { interaction, BranchExistsAction, WarnScenario, CommitSources, LogMenuAPI } from "./interaction";
 import { humanise } from "./humanise"
 import { partition } from "./util";
-import * as nls from 'vscode-nls';
 import { toFossilUri } from "./uri";
 
 const localize = nls.loadMessageBundle();
@@ -78,17 +80,11 @@ export class CommandCenter {
         await this._openResource(resource, undefined, true, false);
     }
 
-    private async _openResource(resource: Resource, preview?: boolean, preserveFocus?: boolean, preserveSelection?: boolean): Promise<void> {
+    private async _openResource(resource: Resource | undefined, preview?: boolean, preserveFocus?: boolean, preserveSelection?: boolean): Promise<void> {
+        if(!resource) return;
         const left = this.getLeftResource(resource);
         const right = this.getRightResource(resource);
         const title = this.getTitle(resource);
-
-        if (!right) {
-            // TODO
-            console.error('oh no');
-            return;
-        }
-
 
         const opts: TextDocumentShowOptions = {
             preserveFocus,
@@ -109,43 +105,43 @@ export class CommandCenter {
             await window.showTextDocument(document, opts);
             return;
         }
-
         return await commands.executeCommand<void>('vscode.diff', left, right, title, opts);
     }
 
     private getLeftResource(resource: Resource): Uri | undefined {
         switch (resource.status) {
-            case Status.MODIFIED:
-            case Status.CONFLICT:
-                console.log('Left resource: ' + resource.original)
-                return toFossilUri(resource.original, ".");
-
             case Status.RENAMED:
                 if (resource.renameResourceUri) {
-                    return toFossilUri(resource.original, ".");
+                    return toFossilUri(resource.original);
                 }
                 return undefined;
 
             case Status.ADDED:
             case Status.IGNORED:
-            case Status.DELETED:
-            case Status.MISSING:
             case Status.UNTRACKED:
             case Status.CLEAN:
                 return undefined;
+
+            case Status.MODIFIED:
+            case Status.CONFLICT:
+            case Status.DELETED:
+            case Status.MISSING:
+            default:
+                return toFossilUri(resource.original);
         }
     }
 
-    private getRightResource(resource: Resource): Uri | undefined {
+    private getRightResource(resource: Resource): Uri {
         if (resource.mergeStatus === MergeStatus.UNRESOLVED &&
             resource.status !== Status.MISSING &&
             resource.status !== Status.DELETED) {
-            return resource.resourceUri.with({ scheme: 'fossil', query: 'p2()' });
+            return resource.resourceUri.with({ scheme: 'fossil' });
         }
 
         switch (resource.status) {
             case Status.DELETED:
-                return resource.resourceUri.with({ scheme: 'fossil', query: '.' });
+            case Status.MISSING:
+                return resource.resourceUri.with({ scheme: 'fossil', query: 'empty' });
 
             case Status.ADDED:
             case Status.IGNORED:
@@ -154,11 +150,8 @@ export class CommandCenter {
             case Status.UNTRACKED:
             case Status.CLEAN:
             case Status.CONFLICT:
-                console.log('Right resource: ' + resource.resourceUri)
+            default:
                 return resource.resourceUri;
-
-            case Status.MISSING:
-                return undefined;
         }
     }
 
@@ -181,6 +174,9 @@ export class CommandCenter {
 
             case Status.DELETED:
                 return `${basename} (Deleted)`;
+
+            case Status.MISSING:
+                return `${basename} (Missing)`;
         }
 
         return '';
@@ -440,7 +436,7 @@ export class CommandCenter {
                         (
                             s.resourceGroup instanceof WorkingDirectoryGroup
                             || s.resourceGroup instanceof MergeGroup
-                            // || s.resourceGroup instanceof UntrackedGroup
+                            || s.resourceGroup instanceof UntrackedGroup
                         )
                     ) as Resource[];
 
@@ -788,22 +784,9 @@ export class CommandCenter {
         }
     }
 
-    private async validateBranchPush(repository: Repository): Promise<boolean> {
-        //TODO: add some warning or check in here
-        return true;
-    }
-
     @command('fossil.push', { repository: true })
     async push(repository: Repository): Promise<void> {
-        const path = await repository.getPath();
-
-        // check for branches with 2+ heads
-        const validated = await this.validateBranchPush(repository);
-
-        if (validated) {
-            const pushOptions = await repository.createPushOptions();
-            await repository.push(undefined, pushOptions);
-        }
+        await repository.push(undefined);
     }
 
     @command('fossil.pushTo', { repository: true })
@@ -814,9 +797,7 @@ export class CommandCenter {
             await interaction.warnNoPaths('push');
             return;
         }
-
-        const pushOptions = await repository.createPushOptions();
-        repository.push(path.url, pushOptions);
+        repository.push(path.url);
     }
 
     @command('fossil.showOutput', { repository: true })
@@ -965,7 +946,6 @@ export class CommandCenter {
         }
 
         if (uri.scheme === 'file') {
-            const uriString = uri.toString();
             const repository = this.model.getRepository(uri);
 
             if (!repository) {
