@@ -2,6 +2,28 @@ Changelog
 =============================================
 
 
+v0.0.14
+---------------------------------------------
+## What's New
+- Throw error when caught by exec command instead of returning empty string
+   This fixes a host of odd behaviors
+
+
+v0.0.13
+---------------------------------------------
+## What's New
+- Wait for user to select to open error prompt before opening it
+- Filter out additional error case of `fossil cat` command
+
+
+v0.0.12
+---------------------------------------------
+## What's New
+- Open Fossil output log on error prompt
+- Update which errors generate error prompt
+- General cleanup
+
+
 v0.0.11
 ---------------------------------------------
 ## What's New
