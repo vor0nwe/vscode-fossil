@@ -1131,6 +1131,7 @@ export class CommandCenter {
         }
 
         const now = new Date();
+        // Convert UTC to local time for user-friendly stash message
         const dateTime = new Date(
             now.getTime() - now.getTimezoneOffset() * 60000
         )
@@ -1163,11 +1164,11 @@ export class CommandCenter {
         const items = await repository.stashList();
         const stashId = await interaction.pickStashItem(items, 'apply');
         if (stashId) {
-            // First, clear the staging area
+            // Clear all currently staged changes before loading the stash
             await repository.unstage();
             // Apply the stash to working directory
             await repository.stashApplyOrDrop('apply', stashId);
-            // Stage all the changes that were just applied
+            // Stage all files modified by the stash apply operation
             await repository.stage();
         }
     }
@@ -1180,7 +1181,7 @@ export class CommandCenter {
         if (stashId) {
             // Apply the stash to working directory
             await repository.stashApplyOrDrop('apply', stashId);
-            // Stage all the changes that were just applied
+            // Stage all files modified by the stash apply operation (keeps existing staged changes)
             await repository.stage();
         }
     }
