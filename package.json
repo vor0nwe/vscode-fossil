@@ -353,6 +353,21 @@
                 "category": "Fossil"
             },
             {
+                "command": "fossil.stashStage",
+                "title": "Stash Stage (Save Staging Area)",
+                "category": "Fossil"
+            },
+            {
+                "command": "fossil.stashLoadIntoStaging",
+                "title": "Stash Load into Staging",
+                "category": "Fossil"
+            },
+            {
+                "command": "fossil.stashApplyToStaging",
+                "title": "Stash Apply to Staging",
+                "category": "Fossil"
+            },
+            {
                 "command": "fossil.praise",
                 "title": "Praise (blame)",
                 "category": "Fossil"
@@ -534,6 +549,18 @@
                 },
                 {
                     "command": "fossil.stashSnapshot",
+                    "when": "fossilOpenRepositoryCount"
+                },
+                {
+                    "command": "fossil.stashStage",
+                    "when": "fossilOpenRepositoryCount"
+                },
+                {
+                    "command": "fossil.stashLoadIntoStaging",
+                    "when": "fossilOpenRepositoryCount"
+                },
+                {
+                    "command": "fossil.stashApplyToStaging",
                     "when": "fossilOpenRepositoryCount"
                 },
                 {
@@ -784,6 +811,21 @@
                     "command": "fossil.stashDrop",
                     "when": "scmProvider == fossil",
                     "group": "stash@4"
+                },
+                {
+                    "command": "fossil.stashStage",
+                    "when": "scmProvider == fossil",
+                    "group": "staging@1"
+                },
+                {
+                    "command": "fossil.stashLoadIntoStaging",
+                    "when": "scmProvider == fossil",
+                    "group": "staging@2"
+                },
+                {
+                    "command": "fossil.stashApplyToStaging",
+                    "when": "scmProvider == fossil",
+                    "group": "staging@3"
                 }
             ],
             "scm/change/title": [

@@ -89,6 +89,16 @@ about cloning from the extension.
   3. Make a commit
   4. Run `Stash Pop`
 
+* **Using Stash as Staging Area**
+
+  Fossil stashes can be treated as persistent, named staging areas. This is useful when working with multiple sets of changes:
+
+  1. **Save staging area to stash**: Stage your changes, then use `Stash Stage (Save Staging Area)` to save them to a named stash. The staging area will be cleared.
+  2. **Load stash into staging**: Use `Stash Load into Staging` to load a stash into the staging area (replacing current staged changes).
+  3. **Apply stash to staging**: Use `Stash Apply to Staging` to apply a stash to the staging area (additive, keeps existing staged changes).
+
+  This allows you to maintain multiple sets of changes as named stashes and switch between them as needed.
+
 * **Blame**
 
   Use `Fossil: praise` command from command palette

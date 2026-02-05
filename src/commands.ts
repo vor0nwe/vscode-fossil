@@ -116,6 +116,9 @@ type CommandKey =
     | 'stashPop'
     | 'stashSave'
     | 'stashSnapshot'
+    | 'stashStage'
+    | 'stashLoadIntoStaging'
+    | 'stashApplyToStaging'
     | 'sync'
     | 'undo'
     | 'unstage'
@@ -1114,6 +1117,72 @@ export class CommandCenter {
     @command(Inline.Repository)
     async stashDrop(repository: Repository): Promise<void> {
         return this.stashApplyOrDrop(repository, 'drop');
+    }
+
+    @command(Inline.Repository)
+    async stashStage(repository: Repository): Promise<void> {
+        // Save the staging area to a stash
+        const stagedResources = repository.stagingGroup.resourceStates;
+        if (stagedResources.length === 0) {
+            window.showWarningMessage(
+                localize('no staged changes', 'No staged changes to stash')
+            );
+            return;
+        }
+
+        const now = new Date();
+        const dateTime = new Date(
+            now.getTime() - now.getTimezoneOffset() * 60000
+        )
+            .toISOString()
+            .slice(0, 19)
+            .replace('T', ' ');
+        const defaultMessage =
+            `vscode-stage ${dateTime}` as FossilCommitMessage;
+        const stashCommitMessage = await interaction.inputCommitMessage(
+            defaultMessage
+        );
+        
+        if (stashCommitMessage !== undefined) {
+            if (!(await this.checkTrackedUnsavedFiles(repository))) {
+                return;
+            }
+            await repository.stash(
+                stashCommitMessage,
+                CommitScope.STAGING_GROUP,
+                'save'
+            );
+            // Clear the staging area after saving to stash
+            await repository.unstage();
+        }
+    }
+
+    @command(Inline.Repository)
+    async stashLoadIntoStaging(repository: Repository): Promise<void> {
+        // Load a stash into the staging area (replacing current staged changes)
+        const items = await repository.stashList();
+        const stashId = await interaction.pickStashItem(items, 'apply');
+        if (stashId) {
+            // First, clear the staging area
+            await repository.unstage();
+            // Apply the stash to working directory
+            await repository.stashApplyOrDrop('apply', stashId);
+            // Stage all the changes that were just applied
+            await repository.stage();
+        }
+    }
+
+    @command(Inline.Repository)
+    async stashApplyToStaging(repository: Repository): Promise<void> {
+        // Apply a stash to the staging area (additive)
+        const items = await repository.stashList();
+        const stashId = await interaction.pickStashItem(items, 'apply');
+        if (stashId) {
+            // Apply the stash to working directory
+            await repository.stashApplyOrDrop('apply', stashId);
+            // Stage all the changes that were just applied
+            await repository.stage();
+        }
     }
 
     @command(Inline.Repository)
