@@ -1142,7 +1142,7 @@ export class CommandCenter {
         const stashCommitMessage = await interaction.inputCommitMessage(
             defaultMessage
         );
-        
+
         if (stashCommitMessage !== undefined) {
             if (!(await this.checkTrackedUnsavedFiles(repository))) {
                 return;
