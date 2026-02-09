@@ -1,4 +1,11 @@
-import { FossilRoot, FileStatus, ResourceStatus } from './openedRepository';
+import {
+    FossilRoot,
+    FileStatus,
+    ResourceStatus,
+    StashItem,
+    StashFile,
+    StashID,
+} from './openedRepository';
 import {
     Uri,
     SourceControlResourceGroup,
@@ -182,3 +189,87 @@ export const isResourceGroup = (
     obj: FossilResource | SourceControlResourceGroup
 ): obj is SourceControlResourceGroup =>
     (<SourceControlResourceGroup>obj).resourceStates !== undefined;
+
+/**
+ * Manages dynamic stash resource groups
+ */
+export class StashGroupManager {
+    private stashGroups: Map<StashID, FossilResourceGroup> = new Map();
+
+    constructor(private sourceControl: SourceControl) {}
+
+    /**
+     * Update stash groups based on current stash list
+     */
+    updateStashGroups(
+        stashes: StashItem[],
+        stashFilesMap: Map<StashID, StashFile[]>,
+        repositoryRoot: FossilRoot
+    ): void {
+        // Remove groups for stashes that no longer exist
+        const currentStashIds = new Set(stashes.map(s => s.stashId));
+        for (const [stashId, group] of this.stashGroups.entries()) {
+            if (!currentStashIds.has(stashId)) {
+                group.disposable.dispose();
+                this.stashGroups.delete(stashId);
+            }
+        }
+
+        // Create or update groups for each stash
+        for (const stash of stashes) {
+            let group = this.stashGroups.get(stash.stashId);
+
+            if (!group) {
+                // Create new group
+                const groupId = `stash-${stash.stashId}` as FossilResourceId;
+                const label = this.formatStashLabel(stash);
+                group = new FossilResourceGroup(
+                    this.sourceControl,
+                    groupId,
+                    label
+                );
+                this.stashGroups.set(stash.stashId, group);
+            }
+
+            // Update resources for this stash
+            const stashFiles = stashFilesMap.get(stash.stashId) || [];
+            const resources: FossilResource[] = stashFiles.map(file => {
+                const uri = Uri.file(path.join(repositoryRoot, file.path));
+                return new FossilResource(
+                    group!,
+                    uri,
+                    file.status,
+                    'EDITED', // Default class for stashed files
+                    undefined
+                );
+            });
+
+            group.updateResources(resources);
+        }
+    }
+
+    /**
+     * Format stash label for display
+     */
+    private formatStashLabel(stash: StashItem): string {
+        const comment = stash.comment || '(no message)';
+        return `Stash ${stash.stashId}: ${comment}`;
+    }
+
+    /**
+     * Dispose all stash groups
+     */
+    dispose(): void {
+        for (const group of this.stashGroups.values()) {
+            group.disposable.dispose();
+        }
+        this.stashGroups.clear();
+    }
+
+    /**
+     * Get all managed stash groups
+     */
+    getGroups(): FossilResourceGroup[] {
+        return Array.from(this.stashGroups.values());
+    }
+}

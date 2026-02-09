@@ -39,6 +39,7 @@ import {
     ResourceStatus,
     StashID,
     StashItem,
+    StashFile,
     StatusString,
     TimelineOptions,
     UserPath,
@@ -61,6 +62,7 @@ import {
     createEmptyStatusGroups,
     IStatusGroups,
     groupStatuses,
+    StashGroupManager,
 } from './resourceGroups';
 import * as interaction from './interaction';
 import type { InteractionAPI, NewBranchOptions } from './interaction';
@@ -277,6 +279,7 @@ export class Repository implements IDisposable, InteractionAPI {
     // ToDo: rename and possibly make non optional
     private _fossilStatus: FossilStatus | undefined;
     private _groups: IStatusGroups;
+    private _stashGroupManager: StashGroupManager;
 
     get sourceControl(): Readonly<SourceControl> {
         return this._sourceControl;
@@ -387,6 +390,12 @@ export class Repository implements IDisposable, InteractionAPI {
                 (group: FossilResourceGroup) => group.disposable
             )
         );
+
+        // Initialize stash group manager
+        this._stashGroupManager = new StashGroupManager(this._sourceControl);
+        this.disposables.push({
+            dispose: () => this._stashGroupManager.dispose(),
+        });
 
         this.statusBar = new StatusBarCommands(this, this.sourceControl);
         this.onDidChangeOperations(
@@ -1083,6 +1092,10 @@ export class Repository implements IDisposable, InteractionAPI {
             statusGroups: this._groups,
         });
         this._sourceControl.count = this.count;
+
+        // Also update stash groups
+        await this.updateStashGroups();
+
         return;
     }
 
@@ -1093,6 +1106,30 @@ export class Repository implements IDisposable, InteractionAPI {
             this._currentBranch = currentBranch;
         }
         this.updateInputBoxPlaceholder();
+    }
+
+    @queue('queue', 's')
+    private async updateStashGroups(): Promise<void> {
+        try {
+            // Get list of all stashes
+            const stashes = await this.repository.stashList();
+
+            // Get files for each stash
+            const stashFilesMap = new Map<StashID, StashFile[]>();
+            for (const stash of stashes) {
+                const files = await this.repository.stashFiles(stash.stashId);
+                stashFilesMap.set(stash.stashId, files);
+            }
+
+            // Update the stash groups
+            this._stashGroupManager.updateStashGroups(
+                stashes,
+                stashFilesMap,
+                this.repository.root
+            );
+        } catch (err) {
+            console.error('Failed to update stash groups:', err);
+        }
     }
 
     private get count(): number {
