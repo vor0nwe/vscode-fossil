@@ -457,6 +457,110 @@ export function StashSuite(this: Suite): void {
         sinon.assert.calledOnce(stashSnapshot);
     }).timeout(15000);
 
+    /**
+     * Save staging area to a stash
+     */
+    test('Stage to Stash', async () => {
+        const repository = getRepository();
+        const uri2 = Uri.joinPath(this.ctx.workspaceUri, 'stash-stage.txt');
+        await fs.writeFile(uri2.fsPath, 'stage this');
+
+        const sib = this.ctx.sandbox.stub(window, 'showInputBox');
+        sib.onFirstCall().resolves('stash-stage commit message');
+
+        const stashSave = getExecStub(this.ctx.sandbox).withArgs([
+            'stash',
+            'save',
+            '-m',
+            'stash-stage commit message',
+            'stash-stage.txt',
+        ]);
+
+        await repository.updateStatus('Test' as Reason);
+        const resource = repository.untrackedGroup.getResource(uri2);
+        assert.ok(resource);
+        await commands.executeCommand('fossil.add', resource);
+        await repository.updateStatus('Test' as Reason);
+
+        // Stage the file
+        const stagedResource = repository.workingGroup.getResource(uri2);
+        assert.ok(stagedResource);
+        await commands.executeCommand('fossil.stage', stagedResource);
+        await repository.updateStatus('Test' as Reason);
+
+        // Verify it's in staging
+        assert.equal(repository.stagingGroup.resourceStates.length, 1);
+
+        // Save staging area to stash
+        await commands.executeCommand('fossil.stashStage');
+        sinon.assert.calledOnce(stashSave);
+
+        // Staging area should be cleared
+        await repository.updateStatus('Test' as Reason);
+        assert.equal(repository.stagingGroup.resourceStates.length, 0);
+    }).timeout(10000);
+
+    /**
+     * Load stash into staging area
+     */
+    test('Load Stash into Staging', async () => {
+        const repository = getRepository();
+        const openedRepository: OpenedRepository = (repository as any)
+            .repository;
+        const uri3 = Uri.joinPath(this.ctx.workspaceUri, 'load-stash.txt');
+        await fs.writeFile(uri3.fsPath, 'load this stash');
+
+        // Add and commit the file first
+        await openedRepository.exec([
+            'add',
+            '--',
+            'load-stash.txt' as RelativePath,
+        ]);
+        await openedRepository.exec([
+            'commit',
+            '-m',
+            'add load-stash.txt' as FossilCommitMessage,
+            '--',
+        ]);
+
+        // Modify and stash the file
+        await fs.writeFile(uri3.fsPath, 'modified content');
+        await openedRepository.exec([
+            'stash',
+            'save',
+            '-m',
+            'load test stash' as FossilCommitMessage,
+            'load-stash.txt' as RelativePath,
+        ]);
+
+        const execStub = getExecStub(this.ctx.sandbox);
+        const stashApply = execStub.withArgs([
+            'stash',
+            'apply',
+            `${1 as StashID}`,
+        ]);
+
+        const sqp = this.ctx.sandbox.stub(window, 'showQuickPick');
+        sqp.onFirstCall().callsFake(items => {
+            assert.ok(items instanceof Array);
+            assert.ok(items.length >= 1);
+            return Promise.resolve(items[0]);
+        });
+
+        // Clear staging area first
+        await repository.unstage();
+        await repository.updateStatus('Test' as Reason);
+        assert.equal(repository.stagingGroup.resourceStates.length, 0);
+
+        // Load stash into staging
+        await commands.executeCommand('fossil.stashLoadIntoStaging');
+        sinon.assert.calledOnce(stashApply);
+
+        await repository.updateStatus('Test' as Reason);
+        // The file should now be in staging
+        assert.ok(repository.stagingGroup.resourceStates.length > 0);
+    }).timeout(15000);
+
     after(async () => {
         await cleanupFossil(getRepository());
     });
