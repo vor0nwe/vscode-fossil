@@ -587,8 +587,12 @@ export class OpenedRepository {
             for (const line of lines) {
                 // Parse diff headers to extract file paths
                 // Format: --- a/path/to/file or +++ b/path/to/file
-                const match = line.match(/^(?:---|\+\+\+) [ab]\/(.+)$/);
-                if (match) {
+                // Also handle /dev/null for new/deleted files
+                const match = line.match(
+                    /^(?:---|\+\+\+) (?:[ab]\/(.+)|\/dev\/null)$/
+                );
+                if (match && match[1]) {
+                    // match[1] is the file path (undefined for /dev/null)
                     const filePath = match[1] as RelativePath;
                     // Check if we've already added this file
                     if (!files.some(f => f.path === filePath)) {
