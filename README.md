@@ -23,6 +23,8 @@ about cloning from the extension.
 
 * Branch, merge, resolve files.
 
+* **Stash Groups**: Each stash is displayed as an expandable group in the SCM sidebar, showing the files contained in each stash. See [documentation](docs/STASH_GROUPS.md) for details.
+
 * Praise
 
 * Quickly switch branches, push and pull via status bar.
