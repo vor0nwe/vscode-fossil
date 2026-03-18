@@ -1056,6 +1056,9 @@ export class Repository implements IDisposable, InteractionAPI {
                     }
                 }
             });
+            // Update stash groups after status update completes
+            // (must be outside updateStatus to avoid queue deadlock)
+            await this.updateStashGroups();
         }
         if (sideEffects.changes) {
             // updateChanges queued
@@ -1092,10 +1095,6 @@ export class Repository implements IDisposable, InteractionAPI {
             statusGroups: this._groups,
         });
         this._sourceControl.count = this.count;
-
-        // Also update stash groups
-        await this.updateStashGroups();
-
         return;
     }
 
