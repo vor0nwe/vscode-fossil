@@ -39,6 +39,7 @@ import {
     ResourceStatus,
     StashID,
     StashItem,
+    StashFile,
     StatusString,
     TimelineOptions,
     UserPath,
@@ -61,6 +62,7 @@ import {
     createEmptyStatusGroups,
     IStatusGroups,
     groupStatuses,
+    StashGroupManager,
 } from './resourceGroups';
 import * as interaction from './interaction';
 import type { InteractionAPI, NewBranchOptions } from './interaction';
@@ -214,6 +216,11 @@ type SideEffects = {
      */
     branch?: true;
     /**
+     * Stash list could have changed
+     * Only execute `fossil stash list` and `fossil stash diff`
+     */
+    stash?: true;
+    /**
      * Tooltip text to show in the statusBar. Currently unused.
      */
     syncText?: string;
@@ -221,7 +228,14 @@ type SideEffects = {
 
 const UpdateStatus: SideEffects = { status: true };
 const UpdateStatusAndBranch: SideEffects = { status: true, branch: true };
+const UpdateStatusAndStash: SideEffects = { status: true, stash: true };
 const UpdateAll: SideEffects = { status: true, branch: true, changes: true };
+const UpdateAllAndStash: SideEffects = {
+    status: true,
+    branch: true,
+    changes: true,
+    stash: true,
+};
 const UpdateChanges: SideEffects = { changes: true };
 
 export const enum CommitScope {
@@ -277,6 +291,7 @@ export class Repository implements IDisposable, InteractionAPI {
     // ToDo: rename and possibly make non optional
     private _fossilStatus: FossilStatus | undefined;
     private _groups: IStatusGroups;
+    private _stashGroupManager: StashGroupManager;
 
     get sourceControl(): Readonly<SourceControl> {
         return this._sourceControl;
@@ -388,6 +403,12 @@ export class Repository implements IDisposable, InteractionAPI {
             )
         );
 
+        // Initialize stash group manager
+        this._stashGroupManager = new StashGroupManager(this._sourceControl);
+        this.disposables.push({
+            dispose: () => this._stashGroupManager.dispose(),
+        });
+
         this.statusBar = new StatusBarCommands(this, this.sourceControl);
         this.onDidChangeOperations(
             this.statusBar.update,
@@ -395,7 +416,7 @@ export class Repository implements IDisposable, InteractionAPI {
             this.disposables
         );
         this.updateModelState(
-            UpdateAll,
+            UpdateAllAndStash,
             'opening repository' as Reason
         ).finally(() =>
             this.updateAutoSyncInterval(typedConfig.autoSyncIntervalMs)
@@ -865,7 +886,7 @@ export class Repository implements IDisposable, InteractionAPI {
         scope: Exclude<CommitScope, CommitScope.UNKNOWN>,
         operation: 'save' | 'snapshot'
     ): Promise<void> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stash(
                 message,
                 operation,
@@ -875,13 +896,13 @@ export class Repository implements IDisposable, InteractionAPI {
     }
 
     async stashList(): Promise<StashItem[]> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stashList()
         );
     }
 
     async stashPop(): Promise<void> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stashPop()
         );
     }
@@ -890,7 +911,7 @@ export class Repository implements IDisposable, InteractionAPI {
         operation: 'apply' | 'drop',
         stashId: StashID
     ): Promise<void> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stashApplyOrDrop(operation, stashId)
         );
     }
@@ -1048,6 +1069,11 @@ export class Repository implements IDisposable, InteractionAPI {
                 }
             });
         }
+        if (sideEffects.stash) {
+            // Update stash groups after status update completes
+            // (must be outside updateStatus to avoid queue deadlock)
+            await this.updateStashGroups();
+        }
         if (sideEffects.changes) {
             // updateChanges queued
             await this.updateChanges(reason);
@@ -1093,6 +1119,30 @@ export class Repository implements IDisposable, InteractionAPI {
             this._currentBranch = currentBranch;
         }
         this.updateInputBoxPlaceholder();
+    }
+
+    @queue('queue', 's')
+    private async updateStashGroups(): Promise<void> {
+        try {
+            // Get list of all stashes
+            const stashes = await this.repository.stashList();
+
+            // Get files for each stash
+            const stashFilesMap = new Map<StashID, StashFile[]>();
+            for (const stash of stashes) {
+                const files = await this.repository.stashFiles(stash.stashId);
+                stashFilesMap.set(stash.stashId, files);
+            }
+
+            // Update the stash groups
+            this._stashGroupManager.updateStashGroups(
+                stashes,
+                stashFilesMap,
+                this.repository.root
+            );
+        } catch (err) {
+            console.error('Failed to update stash groups:', err);
+        }
     }
 
     private get count(): number {

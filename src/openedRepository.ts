@@ -140,6 +140,11 @@ export interface StashItem {
     readonly comment: FossilCommitMessage;
 }
 
+export interface StashFile {
+    readonly path: RelativePath;
+    readonly status: ResourceStatus;
+}
+
 export interface Revision {
     readonly hash: FossilHash;
 }
@@ -568,6 +573,45 @@ export class OpenedRepository {
         stashId: StashID
     ): Promise<void> {
         await this.exec(['stash', operation, `${stashId}`]);
+    }
+
+    /**
+     * Get the list of files in a stash by parsing the diff output
+     */
+    async stashFiles(stashId: StashID): Promise<StashFile[]> {
+        try {
+            const res = await this.exec(['stash', 'diff', `${stashId}`]);
+            const files: StashFile[] = [];
+            const lines = res.stdout.split('\n');
+
+            for (const line of lines) {
+                // Parse diff headers to extract file paths
+                // Format: --- a/path/to/file or +++ b/path/to/file
+                // Also handle /dev/null for new/deleted files
+                const match = line.match(
+                    /^(?:---|\+\+\+) (?:[ab]\/(.+)|\/dev\/null)$/
+                );
+                if (match && match[1]) {
+                    // match[1] is the file path (undefined for /dev/null)
+                    const filePath = match[1] as RelativePath;
+                    // Check if we've already added this file
+                    if (!files.some(f => f.path === filePath)) {
+                        // Determine status based on diff patterns
+                        // For now, treat all as MODIFIED (could be enhanced later)
+                        files.push({
+                            path: filePath,
+                            status: ResourceStatus.MODIFIED,
+                        });
+                    }
+                }
+            }
+
+            return files;
+        } catch (err) {
+            // If stash diff fails, return empty array
+            console.error(`Failed to get stash ${stashId} files:`, err);
+            return [];
+        }
     }
 
     /** Report the change status of files in the current checkout

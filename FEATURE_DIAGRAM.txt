@@ -1,0 +1,98 @@
+# Stash as Staging Area Feature
+
+## Traditional Workflow (Before)
+┌─────────────────┐
+│  Working Copy   │  ← Make changes
+└────────┬────────┘
+         │ Stage
+         ↓
+┌─────────────────┐
+│ Staging Area    │  ← Virtual (not persisted)
+│   (Transient)   │
+└────────┬────────┘
+         │ Commit
+         ↓
+┌─────────────────┐
+│   Repository    │
+└─────────────────┘
+
+## New Workflow (With Stash-as-Staging)
+┌─────────────────┐
+│  Working Copy   │  ← Make changes
+└────────┬────────┘
+         │ Stage
+         ↓
+┌─────────────────┐      ┌────────────────────────┐
+│ Staging Area    │      │   Named Stashes        │
+│                 │◄────►│  ┌──────────────────┐  │
+│  Files: A, B    │ Save │  │ "feature-login"  │  │
+│                 │      │  │  Files: A, B     │  │
+└────────┬────────┘ Load │  └──────────────────┘  │
+         │          ─────┤  ┌──────────────────┐  │
+         │ Commit        │  │ "bugfix-123"     │  │
+         ↓               │  │  Files: C, D     │  │
+┌─────────────────┐      │  └──────────────────┘  │
+│   Repository    │      │  ┌──────────────────┐  │
+└─────────────────┘      │  │ "refactor-api"   │  │
+                         │  │  Files: E, F, G  │  │
+                         │  └──────────────────┘  │
+                         └────────────────────────┘
+                         Persistent Storage
+
+## Operations
+
+1. SAVE (Stash Stage)
+   Staging Area → Named Stash
+   Effect: Staging area cleared
+
+2. LOAD (Stash Load into Staging)
+   Named Stash → Staging Area (replaces)
+   Effect: Previous staging cleared
+
+3. APPLY (Stash Apply to Staging)
+   Named Stash → Staging Area (additive)
+   Effect: Adds to existing staging
+
+## Example: Managing Multiple Features
+
+Step 1: Work on Feature A
+┌──────────────┐
+│ Edit A1, A2  │
+└──────┬───────┘
+       │ Stage
+       ↓
+┌──────────────┐
+│ Staged: A1,A2│──Save──→ Stash "feature-a"
+└──────────────┘
+
+Step 2: Work on Feature B
+┌──────────────┐
+│ Edit B1, B2  │
+└──────┬───────┘
+       │ Stage
+       ↓
+┌──────────────┐
+│ Staged: B1,B2│──Save──→ Stash "feature-b"
+└──────────────┘
+
+Step 3: Finish Feature A
+      Load Stash "feature-a"
+              ↓
+┌──────────────┐
+│ Staged: A1,A2│──Commit──→ Repository
+└──────────────┘
+
+Step 4: Finish Feature B
+      Load Stash "feature-b"
+              ↓
+┌──────────────┐
+│ Staged: B1,B2│──Commit──→ Repository
+└──────────────┘
+
+## Benefits
+
+✅ Persistent staging areas (survive extension reload)
+✅ Named contexts (know what each set of changes is for)
+✅ Quick switching (load different stashes)
+✅ Combine changes (apply multiple stashes)
+✅ Works with Fossil's native stash commands

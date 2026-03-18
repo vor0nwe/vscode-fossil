@@ -186,6 +186,7 @@ export type FossilArgs =
       ]
     | ['stash', 'pop']
     | ['stash', 'list']
+    | ['stash', 'diff', `${StashID}`]
     | ['status', '--differ', '--merge']
     | ['tag', 'add', '--raw', FossilTag, FossilBranch]
     | ['tag', 'cancel', '--raw', FossilTag, FossilBranch]
