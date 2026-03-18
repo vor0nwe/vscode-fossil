@@ -216,6 +216,11 @@ type SideEffects = {
      */
     branch?: true;
     /**
+     * Stash list could have changed
+     * Only execute `fossil stash list` and `fossil stash diff`
+     */
+    stash?: true;
+    /**
      * Tooltip text to show in the statusBar. Currently unused.
      */
     syncText?: string;
@@ -223,7 +228,14 @@ type SideEffects = {
 
 const UpdateStatus: SideEffects = { status: true };
 const UpdateStatusAndBranch: SideEffects = { status: true, branch: true };
+const UpdateStatusAndStash: SideEffects = { status: true, stash: true };
 const UpdateAll: SideEffects = { status: true, branch: true, changes: true };
+const UpdateAllAndStash: SideEffects = {
+    status: true,
+    branch: true,
+    changes: true,
+    stash: true,
+};
 const UpdateChanges: SideEffects = { changes: true };
 
 export const enum CommitScope {
@@ -404,7 +416,7 @@ export class Repository implements IDisposable, InteractionAPI {
             this.disposables
         );
         this.updateModelState(
-            UpdateAll,
+            UpdateAllAndStash,
             'opening repository' as Reason
         ).finally(() =>
             this.updateAutoSyncInterval(typedConfig.autoSyncIntervalMs)
@@ -874,7 +886,7 @@ export class Repository implements IDisposable, InteractionAPI {
         scope: Exclude<CommitScope, CommitScope.UNKNOWN>,
         operation: 'save' | 'snapshot'
     ): Promise<void> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stash(
                 message,
                 operation,
@@ -884,13 +896,13 @@ export class Repository implements IDisposable, InteractionAPI {
     }
 
     async stashList(): Promise<StashItem[]> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stashList()
         );
     }
 
     async stashPop(): Promise<void> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stashPop()
         );
     }
@@ -899,7 +911,7 @@ export class Repository implements IDisposable, InteractionAPI {
         operation: 'apply' | 'drop',
         stashId: StashID
     ): Promise<void> {
-        return this.runWithProgress(UpdateStatus, async () =>
+        return this.runWithProgress(UpdateStatusAndStash, async () =>
             this.repository.stashApplyOrDrop(operation, stashId)
         );
     }
@@ -1056,6 +1068,8 @@ export class Repository implements IDisposable, InteractionAPI {
                     }
                 }
             });
+        }
+        if (sideEffects.stash) {
             // Update stash groups after status update completes
             // (must be outside updateStatus to avoid queue deadlock)
             await this.updateStashGroups();
